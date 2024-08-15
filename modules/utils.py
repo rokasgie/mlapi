@@ -1,461 +1,400 @@
-
-from configparser import ConfigParser
-import modules.common_params as g
-import requests
-import progressbar as pb
-import os
-import cv2
-import re
 import ast
+import logging
+import re
 import traceback
+from configparser import ConfigParser
+
 import pyzm.helpers.utils as pyzmutils
 
-g.config = {}
+logger = logging.getLogger()
+
 
 def str2tuple(str):
-    m =  [tuple(map(int, x.strip().split(','))) for x in str.split(' ')]
+    m = [tuple(map(int, x.strip().split(','))) for x in str.split(' ')]
     if len(m) < 3:
-        raise ValueError ('{} formed an invalid polygon. Needs to have at least 3 points'.format(m))
+        raise ValueError('{} formed an invalid polygon. Needs to have at least 3 points'.format(m))
     else:
         return m
+
 
 # credit: https://stackoverflow.com/a/5320179
 def findWholeWord(w):
     return re.compile(r'\b({0})\b'.format(w), flags=re.IGNORECASE).search
 
-def check_and_import_zones(api):
 
-    url = '{}/api/zones.json'.format(g.config.get('portal'))       
+def check_and_import_zones(api, config):
+    url = '{}/api/zones.json'.format(config.global_config.get('portal'))
     try:
         j = api._make_request(url=url, type='get')
     except Exception as e:
-        g.logger.Error ('Zone API error: {}'.format(e))
-        return 
+        logger.error('Zone API error: {}'.format(e))
+        return
 
     for item in j.get('zones'):
-        mid = item['Zone']['MonitorId']
+        mid = str(item['Zone']['MonitorId'])
 
         # if we have a 'no' inside local monitor section, don't import 
-        if mid in g.monitor_config and g.monitor_config[mid].get('import_zm_zones') == 'no':
-            g.logger.Debug(1,'Not importing zones for monitor:{} as the monitor specific section says no'.format(mid))
-            continue 
-        # else if global is no, and there is no local, don't import
-        elif g.config['import_zm_zones'] == 'no' and (mid not in g.monitor_config or not g.monitor_config[mid].get('import_zm_zones')):
-            g.logger.Debug(1,'Not importing zone:{} for monitor:{} as the global setting says no and there is no local override'.format(item['Zone']['Name'], mid))
+        if mid in config.monitor_config and config.monitor_config[mid].get('import_zm_zones') == 'no':
+            logger.debug('Not importing zones for monitor:{} as the monitor specific section says no'.format(
+                mid))
             continue
-      
+            # else if global is no, and there is no local, don't import
+        elif config.global_config['import_zm_zones'] == 'no' and (
+                mid not in config.monitor_config or not config.monitor_config[mid].get('import_zm_zones')):
+            logger.debug(
+                'Not importing zone:{} for monitor:{} as the global setting says no and there is no local override'.format(
+                    item['Zone']['Name'], mid))
+            continue
+
         # At this stage, global is 'yes' and local is either unspecified or has 'yes'
-        if not mid in g.monitor_config:
-            g.monitor_config[mid]={}
-            g.monitor_zone_patterns[mid] = {}
-            g.monitor_polygons[mid] = []
+        if mid not in config.monitor_config.keys():
+            config.monitor_config[mid] = {}
+            config.monitor_zone_patterns[mid] = {}
+            config.monitor_polygons[mid] = []
 
         if item['Zone']['Type'] == 'Inactive':
-            g.logger.Debug(1, 'Skipping {} as it is inactive'.format(item['Zone']['Name']))
+            logger.debug('Skipping {} as it is inactive'.format(item['Zone']['Name']))
             continue
-    
-        item['Zone']['Name'] = item['Zone']['Name'].replace(' ','_').lower()
-        g.logger.Debug(2,'For monitor:{} importing zoneminder polygon: {} [{}]'.format(mid,item['Zone']['Name'], item['Zone']['Coords']))
-        g.monitor_polygons[mid].append({
+
+        item['Zone']['Name'] = item['Zone']['Name'].replace(' ', '_').lower()
+        logger.debug('For monitor:{} importing zoneminder polygon: {} [{}]'.format(mid, item['Zone']['Name'],
+                                                                                   item['Zone']['Coords']))
+        config.monitor_polygons[mid].append({
             'name': item['Zone']['Name'],
             'value': str2tuple(item['Zone']['Coords']),
             'pattern': None
         })
-        
+
     # Now copy over pending zone patterns from process_config
-    for mid in g.monitor_polygons:
-        for poly in g.monitor_polygons[mid]:
-            for zone_name in g.monitor_zone_patterns[mid]:
+    for mid in config.monitor_polygons:
+        for poly in config.monitor_polygons[mid]:
+            for zone_name in config.monitor_zone_patterns[mid]:
                 if poly['name'] == zone_name:
-                    poly['pattern'] = g.monitor_zone_patterns[mid][zone_name]
-                    g.logger.Debug(2, 'For monitor:{} replacing match pattern for polygon:{} with: {}'.format( mid,poly['name'],poly['pattern'] ))
+                    poly['pattern'] = config.monitor_zone_patterns[mid][zone_name]
+                    logger.debug(
+                        'For monitor:{} replacing match pattern for polygon:{} with: {}'.format(
+                            mid, poly['name'], poly['pattern'])
+                    )
+    return config
 
-def convert_config_to_ml_sequence():
-    ml_options={}
 
-    for ds in g.config['detection_sequence']:
+def convert_config_to_ml_sequence(config):
+    ml_options = {}
+
+    for ds in config.global_config['detection_sequence']:
         if ds == 'object':
-        
+
             ml_options['object'] = {
-                'general':{
-                    'pattern': g.config['object_detection_pattern'],
-                    'disable_locks': g.config['disable_locks'],
-                    'same_model_sequence_strategy': 'first' # 'first' 'most', 'most_unique'
+                'general': {
+                    'pattern': config.global_config['object_detection_pattern'],
+                    'disable_locks': config.global_config['disable_locks'],
+                    'same_model_sequence_strategy': 'first'  # 'first' 'most', 'most_unique'
 
                 },
                 'sequence': [{
-                    'tpu_max_processes': g.config['tpu_max_processes'],
-                    'tpu_max_lock_wait': g.config['tpu_max_lock_wait'],
-                    'gpu_max_processes': g.config['gpu_max_processes'],
-                    'gpu_max_lock_wait': g.config['gpu_max_lock_wait'],
-                    'cpu_max_processes': g.config['cpu_max_processes'],
-                    'cpu_max_lock_wait': g.config['cpu_max_lock_wait'],
-                    'max_detection_size': g.config['max_detection_size'],
-                    'object_config':g.config['object_config'],
-                    'object_weights':g.config['object_weights'],
-                    'object_labels': g.config['object_labels'],
-                    'object_min_confidence': g.config['object_min_confidence'],
-                    'object_framework':g.config['object_framework'],
-                    'object_processor': g.config['object_processor'],
+                    'tpu_max_processes': config.global_config['tpu_max_processes'],
+                    'tpu_max_lock_wait': config.global_config['tpu_max_lock_wait'],
+                    'gpu_max_processes': config.global_config['gpu_max_processes'],
+                    'gpu_max_lock_wait': config.global_config['gpu_max_lock_wait'],
+                    'cpu_max_processes': config.global_config['cpu_max_processes'],
+                    'cpu_max_lock_wait': config.global_config['cpu_max_lock_wait'],
+                    'max_detection_size': config.global_config['max_detection_size'],
+                    'object_config': config.global_config['object_config'],
+                    'object_weights': config.global_config['object_weights'],
+                    'object_labels': config.global_config['object_labels'],
+                    'object_min_confidence': config.global_config['object_min_confidence'],
+                    'object_framework': config.global_config['object_framework'],
+                    'object_processor': config.global_config['object_processor'],
                 }]
             }
         elif ds == 'face':
             ml_options['face'] = {
-                'general':{
-                    'pattern': g.config['face_detection_pattern'],
+                'general': {
+                    'pattern': config.global_config['face_detection_pattern'],
                     'same_model_sequence_strategy': 'first',
-                #    'pre_existing_labels':['person'],
+                    #    'pre_existing_labels':['person'],
                 },
                 'sequence': [{
-                    'tpu_max_processes': g.config['tpu_max_processes'],
-                    'tpu_max_lock_wait': g.config['tpu_max_lock_wait'],
-                    'gpu_max_processes': g.config['gpu_max_processes'],
-                    'gpu_max_lock_wait': g.config['gpu_max_lock_wait'],
-                    'cpu_max_processes': g.config['cpu_max_processes'],
-                    'cpu_max_lock_wait': g.config['cpu_max_lock_wait'],
-                    'face_detection_framework': g.config['face_detection_framework'],
-                    'face_recognition_framework': g.config['face_recognition_framework'],
-                    'face_processor': g.config['face_processor'],
-                    'known_images_path': g.config['known_images_path'],
-                    'face_model': g.config['face_model'],
-                    'face_train_model':g.config['face_train_model'],
-                    'unknown_images_path': g.config['unknown_images_path'],
-                    'unknown_face_name': g.config['unknown_face_name'],
-                    'save_unknown_faces': g.config['save_unknown_faces'],
-                    'save_unknown_faces_leeway_pixels': g.config['save_unknown_faces_leeway_pixels'],
-                    'face_recog_dist_threshold': g.config['face_recog_dist_threshold'],
-                    'face_num_jitters': g.config['face_num_jitters'],
-                    'face_upsample_times':g.config['face_upsample_times']
+                    'tpu_max_processes': config.global_config['tpu_max_processes'],
+                    'tpu_max_lock_wait': config.global_config['tpu_max_lock_wait'],
+                    'gpu_max_processes': config.global_config['gpu_max_processes'],
+                    'gpu_max_lock_wait': config.global_config['gpu_max_lock_wait'],
+                    'cpu_max_processes': config.global_config['cpu_max_processes'],
+                    'cpu_max_lock_wait': config.global_config['cpu_max_lock_wait'],
+                    'face_detection_framework': config.global_config['face_detection_framework'],
+                    'face_recognition_framework': config.global_config['face_recognition_framework'],
+                    'face_processor': config.global_config['face_processor'],
+                    'known_images_path': config.global_config['known_images_path'],
+                    'face_model': config.global_config['face_model'],
+                    'face_train_model': config.global_config['face_train_model'],
+                    'unknown_images_path': config.global_config['unknown_images_path'],
+                    'unknown_face_name': config.global_config['unknown_face_name'],
+                    'save_unknown_faces': config.global_config['save_unknown_faces'],
+                    'save_unknown_faces_leeway_pixels': config.global_config['save_unknown_faces_leeway_pixels'],
+                    'face_recog_dist_threshold': config.global_config['face_recog_dist_threshold'],
+                    'face_num_jitters': config.global_config['face_num_jitters'],
+                    'face_upsample_times': config.global_config['face_upsample_times']
                 }]
 
             }
         elif ds == 'alpr':
             ml_options['alpr'] = {
-                'general':{
-                    'pattern': g.config['alpr_detection_pattern'],
+                'general': {
+                    'pattern': config.global_config['alpr_detection_pattern'],
                     'same_model_sequence_strategy': 'first',
-                #    'pre_existing_labels':['person'],
+                    #    'pre_existing_labels':['person'],
                 },
                 'sequence': [{
-                    'tpu_max_processes': g.config['tpu_max_processes'],
-                    'tpu_max_lock_wait': g.config['tpu_max_lock_wait'],
-                    'gpu_max_processes': g.config['gpu_max_processes'],
-                    'gpu_max_lock_wait': g.config['gpu_max_lock_wait'],
-                    'cpu_max_processes': g.config['cpu_max_processes'],
-                    'cpu_max_lock_wait': g.config['cpu_max_lock_wait'],
-                    'alpr_service': g.config['alpr_service'],
-                    'alpr_url': g.config['alpr_url'],
-                    'alpr_key': g.config['alpr_key'],
-                    'alpr_api_type': g.config['alpr_api_type'],
-                    'platerec_stats': g.config['platerec_stats'],
-                    'platerec_regions': g.config['platerec_regions'],
-                    'platerec_min_dscore': g.config['platerec_min_dscore'],
-                    'platerec_min_score': g.config['platerec_min_score'],
-                    'openalpr_recognize_vehicle': g.config['openalpr_recognize_vehicle'],
-                    'openalpr_country': g.config['openalpr_country'],
-                    'openalpr_state': g.config['openalpr_state'],
-                    'openalpr_min_confidence': g.config['openalpr_min_confidence'],
-                    'openalpr_cmdline_binary': g.config['openalpr_cmdline_binary'],
-                    'openalpr_cmdline_params': g.config['openalpr_cmdline_params'],
-                    'openalpr_cmdline_min_confidence': g.config['openalpr_cmdline_min_confidence'],
+                    'tpu_max_processes': config.global_config['tpu_max_processes'],
+                    'tpu_max_lock_wait': config.global_config['tpu_max_lock_wait'],
+                    'gpu_max_processes': config.global_config['gpu_max_processes'],
+                    'gpu_max_lock_wait': config.global_config['gpu_max_lock_wait'],
+                    'cpu_max_processes': config.global_config['cpu_max_processes'],
+                    'cpu_max_lock_wait': config.global_config['cpu_max_lock_wait'],
+                    'alpr_service': config.global_config['alpr_service'],
+                    'alpr_url': config.global_config['alpr_url'],
+                    'alpr_key': config.global_config['alpr_key'],
+                    'alpr_api_type': config.global_config['alpr_api_type'],
+                    'platerec_stats': config.global_config['platerec_stats'],
+                    'platerec_regions': config.global_config['platerec_regions'],
+                    'platerec_min_dscore': config.global_config['platerec_min_dscore'],
+                    'platerec_min_score': config.global_config['platerec_min_score'],
+                    'openalpr_recognize_vehicle': config.global_config['openalpr_recognize_vehicle'],
+                    'openalpr_country': config.global_config['openalpr_country'],
+                    'openalpr_state': config.global_config['openalpr_state'],
+                    'openalpr_min_confidence': config.global_config['openalpr_min_confidence'],
+                    'openalpr_cmdline_binary': config.global_config['openalpr_cmdline_binary'],
+                    'openalpr_cmdline_params': config.global_config['openalpr_cmdline_params'],
+                    'openalpr_cmdline_min_confidence': config.global_config['openalpr_cmdline_min_confidence'],
                 }]
 
             }
-    ml_options['general'] =   {
-            'model_sequence': ','.join(str(e) for e in g.config['detection_sequence'])
-            #'model_sequence': 'object,face',        
+    ml_options['general'] = {
+        'model_sequence': ','.join(str(e) for e in config.global_config['detection_sequence'])
     }
-    if g.config['detection_mode'] == 'all':
-        g.logger.Debug(3, 'Changing detection_mode from all to most_models to adapt to new features')
-        g.config['detection_mode'] = 'most_models'
+    if config.global_config['detection_mode'] == 'all':
+        logger.debug(3, 'Changing detection_mode from all to most_models to adapt to new features')
+        config.global_config['detection_mode'] = 'most_models'
     return ml_options
 
 
 def str_split(my_str):
     return [x.strip() for x in my_str.split(',')]
 
-def process_config(args):
-# parse config file into a dictionary with defaults
 
-    g.config = {}
+def process_config(args, config):
+    # parse config file into a dictionary with defaults
+
+    config.global_config = {}
 
     has_secrets = False
     secrets_file = None
 
-    def _correct_type(val,t):
+    def _correct_type(val, t):
         if t == 'int':
-             return int(val)
-        elif t == 'eval'  or t == 'dict':
+            return int(val)
+        elif t == 'eval' or t == 'dict':
             return ast.literal_eval(val) if val else None
         elif t == 'str_split':
             return str_split(val) if val else None
-        elif t  == 'string':
+        elif t == 'string':
             return val
         elif t == 'float':
             return float(val)
         else:
-            g.logger.Error ('Unknown conversion type {} for config key:{}'.format(e['type'], e['key']))
+            logger.error('Unknown conversion type {} for config key:{}'.format(e['type'], e['key']))
             return val
 
-    def _set_config_val(k,v):
-    # internal function to parse all keys
-        val = config_file[v['section']].get(k,v['default'])
+    def _set_config_val(k, v):
+        # internal function to parse all keys
+        val = config_file[v['section']].get(k, v['default'])
 
-        if val and val[0] == '!': # its a secret token, so replace
-            g.logger.Debug (1,'Secret token found in config: {}'.format(val));
+        if val and val[0] == '!':  # its a secret token, so replace
+            logger.debug('Secret token found in config: {}'.format(val));
             if not has_secrets:
                 raise ValueError('Secret token found, but no secret file specified')
             if secrets_file.has_option('secrets', val[1:]):
                 vn = secrets_file.get('secrets', val[1:])
-                #g.logger.Debug (1,'Replacing {} with {}'.format(val,vn))
+                # logger.debug (1,'Replacing {} with {}'.format(val,vn))
                 val = vn
             else:
-                raise ValueError ('secret token {} not found in secrets file {}'.format(val,secrets_filename))
+                raise ValueError('secret token {} not found in secrets file {}'.format(val, secrets_filename))
 
-
-        g.config[k] = _correct_type(val, v['type'])
+        config.global_config[k] = _correct_type(val, v['type'])
         if k.find('password') == -1:
-            dval = g.config[k]
+            dval = config.global_config[k]
         else:
             dval = '***********'
-        #g.logger.Debug (1,'Config: setting {} to {}'.format(k,dval))
+
+    # logger.debug (1,'Config: setting {} to {}'.format(k,dval))
 
     # main        
     try:
         config_file = ConfigParser(interpolation=None, inline_comment_prefixes='#')
         config_file.read(args['config'])
-        
-        g.config['pyzm_overrides'] = {}
+
+        config.global_config['pyzm_overrides'] = {}
         if config_file.has_option('general', 'pyzm_overrides'):
             pyzm_overrides = config_file.get('general', 'pyzm_overrides')
-            g.config['pyzm_overrides'] =  ast.literal_eval(pyzm_overrides) if pyzm_overrides else {}
+            config.global_config['pyzm_overrides'] = ast.literal_eval(pyzm_overrides) if pyzm_overrides else {}
             if args.get('debug'):
-                g.config['pyzm_overrides']['dump_console'] = True
-                g.config['pyzm_overrides']['log_debug'] = True
-                g.config['pyzm_overrides']['log_level_debug'] = 5
-                g.config['pyzm_overrides']['log_debug_target'] = None
+                config.global_config['pyzm_overrides']['dump_console'] = True
+                config.global_config['pyzm_overrides']['log_debug'] = True
+                config.global_config['pyzm_overrides']['log_level_debug'] = 5
+                config.global_config['pyzm_overrides']['log_debug_target'] = None
 
-        if config_file.has_option('general', 'use_zm_logs'):
-            use_zm_logs = config_file.get('general', 'use_zm_logs')
-            if use_zm_logs == 'yes':
-                try:
-                    import pyzm.ZMLog as zmlog
-                    zmlog.init(name='zm_mlapi',override=g.config['pyzm_overrides'])
-                except Exception as e:
-                    g.logger.Error ('Not able to switch to ZM logs: {}'.format(e))
-                else:
-                    g.log = zmlog
-                    g.logger=g.log
-                    g.logger.Info('Switched to ZM logs')
-                    g.logger.Info('Reading config from: {}'.format(args.get('config')))
-
-        g.logger.Info('Reading config from: {}'.format(args.get('config')))
-
-
-        if config_file.has_option('general','secrets'):
+        logger.info('Reading config from: {}'.format(args.get('config')))
+        if config_file.has_option('general', 'secrets'):
             secrets_filename = config_file.get('general', 'secrets')
-            g.config['secrets'] = secrets_filename
-            g.logger.Info('Reading secrets from: {}'.format(secrets_filename))
+            config.global_config['secrets'] = secrets_filename
+            logger.info('Reading secrets from: {}'.format(secrets_filename))
             has_secrets = True
-            secrets_file = ConfigParser(interpolation = None, inline_comment_prefixes='#')
+            secrets_file = ConfigParser(interpolation=None, inline_comment_prefixes='#')
             try:
                 with open(secrets_filename) as f:
                     secrets_file.read_file(f)
             except:
-                raise            
+                raise
         else:
-            g.logger.Debug (1,'No secrets file configured')
+            logger.debug('No secrets file configured')
         # now read config values
-    
-        g.polygons = []
+
+        config.polygons = []
         # first, fill in config with default values
-        for k,v in g.config_vals.items():
+        for k, v in config.config_vals.items():
             val = v.get('default', None)
-            g.config[k] = _correct_type(val, v['type'])
-            #print ('{}={}'.format(k,g.config[k]))
-        
-       
+            config.global_config[k] = _correct_type(val, v['type'])
+            # print ('{}={}'.format(k,g.config[k]))
+
         # now iterate the file
         for sec in config_file.sections():
             if sec == 'secrets':
                 continue
-            
+
             # Move monitor specific stuff to a different structure
             if sec.lower().startswith('monitor-'):
                 ts = sec.split('-')
                 if len(ts) != 2:
-                    g.logger.Error('Skipping section:{} - could not derive monitor name. Expecting monitor-NUM format')
-                    continue 
+                    logger.error(
+                        'Skipping section:{} - could not derive monitor name. Expecting monitor-NUM format')
+                    continue
 
-                mid=ts[1]
-                g.logger.Debug (2,'Found monitor specific section for monitor: {}'.format(mid))
+                mid = ts[1]
+                logger.debug('Found monitor specific section for monitor: {}'.format(mid))
 
-                g.monitor_polygons[mid] = []
-                g.monitor_config[mid] = {}
-                g.monitor_zone_patterns[mid] = {}
+                config.monitor_polygons[mid] = []
+                config.monitor_config[mid] = {}
+                config.monitor_zone_patterns[mid] = {}
                 # Copy the sequence into each monitor because when we do variable subs
                 # later, we will use this for monitor specific work
                 try:
                     ml = config_file.get('ml', 'ml_sequence')
-                    g.monitor_config[mid]['ml_sequence']=ml
+                    config.monitor_config[mid]['ml_sequence'] = ml
                 except:
-                    g.logger.Debug (2, 'ml sequence not found in globals')
-                     
+                    logger.debug('ml sequence not found in globals')
+
                 try:
                     ss = config_file.get('ml', 'stream_sequence')
-                    g.monitor_config[mid]['stream_sequence']=ss
+                    config.monitor_config[mid]['stream_sequence'] = ss
                 except:
-                    g.logger.Debug (2, 'stream sequence not found in globals')
+                    logger.debug('stream sequence not found in globals')
 
                 for item in config_file[sec].items():
                     k = item[0]
                     v = item[1]
                     if k.endswith('_zone_detection_pattern'):
                         zone_name = k.split('_zone_detection_pattern')[0]
-                        g.logger.Debug(2, 'found zone specific pattern:{} storing'.format(zone_name))
-                        g.monitor_zone_patterns[mid][zone_name] = v
+                        logger.debug('found zone specific pattern:{} storing'.format(zone_name))
+                        config.monitor_zone_patterns[mid][zone_name] = v
                         continue
                     else:
-                        if k in g.config_vals:
-                        # This means its a legit config key that needs to be overriden
-                            g.logger.Debug(2,'[{}] overrides key:{} with value:{}'.format(sec, k, v))
-                            g.monitor_config[mid][k]=_correct_type(v,g.config_vals[k]['type'])
-                           # g.monitor_config[mid].append({ 'key':k, 'value':_correct_type(v,g.config_vals[k]['type'])})
+                        if k in config.config_vals:
+                            # This means its a legit config key that needs to be overriden
+                            logger.debug('[{}] overrides key:{} with value:{}'.format(sec, k, v))
+                            config.monitor_config[mid][k] = _correct_type(v, config.config_vals[k]['type'])
+                        # config.monitor_config[mid].append({ 'key':k, 'value':_correct_type(v,g.config_vals[k]['type'])})
                         else:
-                            if k.startswith(('object_','face_', 'alpr_')):
-                                g.logger.Debug(2,'assuming {} is an ML sequence'.format(k))
-                                g.monitor_config[mid][k] = v
+                            if k.startswith(('object_', 'face_', 'alpr_')):
+                                logger.debug('assuming {} is an ML sequence'.format(k))
+                                config.monitor_config[mid][k] = v
                             else:
                                 try:
-                                    p = str2tuple(v) # if not poly, exception will be thrown
-                                    g.monitor_polygons[mid].append({'name': k, 'value': p,'pattern': None})
-                                    g.logger.Debug(2,'adding polygon: {} [{}]'.format(k, v ))
+                                    p = str2tuple(v)  # if not poly, exception will be thrown
+                                    config.monitor_polygons[mid].append({'name': k, 'value': p, 'pattern': None})
+                                    logger.debug('adding polygon: {} [{}]'.format(k, v))
                                 except Exception as e:
-                                    g.logger.Debug(2,'{} is not a polygon, adding it as unknown string key'.format(k))
-                                    g.monitor_config[mid][k]=v
+                                    logger.debug(
+                                        '{} is not a polygon, adding it as unknown string key'.format(
+                                            k))
+                                    config.monitor_config[mid][k] = v
 
-            
                             # TBD only_triggered_zones
 
             # Not monitor specific stuff
-            else: 
+            else:
                 for (k, v) in config_file.items(sec):
-                    if k in g.config_vals:
-                        _set_config_val(k,g.config_vals[k] )
+                    if k in config.config_vals:
+                        _set_config_val(k, config.config_vals[k])
                     else:
-                        g.config[k] = v 
+                        config.global_config[k] = v
 
-        
+                        # Parameter substitution
 
-
-        # Parameter substitution
-
-        g.logger.Debug (2,'Doing parameter substitution for globals')
+        logger.debug('Doing parameter substitution for globals')
         p = r'{{(\w+?)}}'
-        for gk, gv in g.config.items():
-            #input ('Continue')
+        for gk, gv in config.global_config.items():
+            # input ('Continue')
             gv = '{}'.format(gv)
-            #if not isinstance(gv, str):
+            # if not isinstance(gv, str):
             #    continue
             while True:
-                matches = re.findall(p,gv)
+                matches = re.findall(p, gv)
                 replaced = False
                 for match_key in matches:
-                    if match_key in g.config:
+                    if match_key in config.global_config:
                         replaced = True
-                        new_val = g.config[gk].replace('{{' + match_key + '}}',str(g.config[match_key]))
-                        g.config[gk] = new_val
+                        new_val = config.global_config[gk].replace('{{' + match_key + '}}',
+                                                                   str(config.global_config[match_key]))
+                        config.global_config[gk] = new_val
                         gv = new_val
                     else:
-                        g.logger.Debug(2, 'substitution key: {} not found'.format(match_key))
+                        logger.debug('substitution key: {} not found'.format(match_key))
                 if not replaced:
                     break
 
-        g.logger.Debug (2,'Doing parameter substitution for monitor specific entities')
+        logger.debug('Doing parameter substitution for monitor specific entities')
         p = r'{{(\w+?)}}'
-        for mid in g.monitor_config:
-            for key in g.monitor_config[mid]:
-                #input ('Continue')
+        for mid in config.monitor_config:
+            for key in config.monitor_config[mid]:
+                # input ('Continue')
                 gk = key
-                gv = g.monitor_config[mid][key]
+                gv = config.monitor_config[mid][key]
                 gv = '{}'.format(gv)
-                #if not isinstance(gv, str):
+                # if not isinstance(gv, str):
                 #    continue
                 while True:
-                    matches = re.findall(p,gv)
+                    matches = re.findall(p, gv)
                     replaced = False
                     for match_key in matches:
-                        if match_key in g.monitor_config[mid]:
+                        if match_key in config.monitor_config[mid]:
                             replaced = True
-                            new_val =gv.replace('{{' + match_key + '}}',str(g.monitor_config[mid][match_key]))
+                            new_val = gv.replace('{{' + match_key + '}}', str(config.monitor_config[mid][match_key]))
                             gv = new_val
-                            g.monitor_config[mid][key] = gv 
-                        elif match_key in g.config:
+                            config.monitor_config[mid][key] = gv
+                        elif match_key in config.global_config:
                             replaced = True
-                            new_val =gv.replace('{{' + match_key + '}}',str(g.config[match_key]))
+                            new_val = gv.replace('{{' + match_key + '}}', str(config.global_config[match_key]))
                             gv = new_val
-                            g.monitor_config[mid][key] = gv
+                            config.monitor_config[mid][key] = gv
                         else:
-                            g.logger.Debug(2, 'substitution key: {} not found'.format(match_key))
+                            logger.debug('substitution key: {} not found'.format(match_key))
                     if not replaced:
                         break
-            
-            secrets = pyzmutils.read_config(g.config['secrets'])
-            #g.monitor_config[mid]['ml_sequence'] = pyzmutils.template_fill(input_str=g.monitor_config[mid]['ml_sequence'], config=None, secrets=secrets._sections.get('secrets'))
-            #g.monitor_config[mid]['ml_sequence'] = ast.literal_eval(g.monitor_config[mid]['ml_sequence'])
 
-            #g.monitor_config[mid]['stream_sequence'] = pyzmutils.template_fill(input_str=g.monitor_config[mid]['stream_sequence'], config=None, secrets=secrets._sections.get('secrets'))
-            #g.monitor_config[mid]['stream_sequence'] = ast.literal_eval(g.monitor_config[mid]['stream_sequence'])
-
-
-        #print ("GLOBALS={}".format(g.config))
-        #print ("\n\nMID_SPECIFIC={}".format(g.monitor_config))
-        #print ("\n\nMID POLYPATTERNS={}".format(g.monitor_polypatterns))
-        #print ('FINAL POLYS={}'.format(g.monitor_polygons))         
-        #exit(0) 
+            secrets = pyzmutils.read_config(config.global_config['secrets'])
     except Exception as e:
-        g.logger.Error('Error parsing config:{}'.format(args['config']))
-        g.logger.Error('Error was:{}'.format(e))
-        g.logger.Fatal('error: Traceback:{}'.format(traceback.format_exc()))
-        exit(0)
+        logger.error('Error parsing config:{}'.format(args['config']))
+        logger.error('Error was:{}'.format(e))
+        logger.fatal('error: Traceback:{}'.format(traceback.format_exc()))
 
-
-
-
-
-def draw_bbox(img, bbox, labels, classes, confidence, color=None, write_conf=True):
-
-   # g.logger.Debug (1,"DRAW BBOX={} LAB={}".format(bbox,labels))
-    slate_colors = [ 
-            (39, 174, 96),
-            (142, 68, 173),
-            (0,129,254),
-            (254,60,113),
-            (243,134,48),
-            (91,177,47)
-        ]
-   
-    arr_len = len(bgr_slate_colors)
-    for i, label in enumerate(labels):
-        #=g.logger.Debug (1,'drawing box for: {}'.format(label))
-        color = bgr_slate_colors[i % arr_len]
-        if write_conf and confidence:
-            label += ' ' + str(format(confidence[i] * 100, '.2f')) + '%'
-       
-        cv2.rectangle(img, (bbox[i][0], bbox[i][1]), (bbox[i][2], bbox[i][3]), color, 2)
-
-        # write text 
-        font_scale = 0.8
-        font_type = cv2.FONT_HERSHEY_SIMPLEX
-        font_thickness = 1
-        #cv2.getTextSize(text, font, font_scale, thickness)
-        text_size = cv2.getTextSize(label, font_type, font_scale , font_thickness)[0]
-        text_width_padded = text_size[0] + 4
-        text_height_padded = text_size[1] + 4
-
-        r_top_left = (bbox[i][0], bbox[i][1] - text_height_padded)
-        r_bottom_right = (bbox[i][0] + text_width_padded, bbox[i][1])
-  
-        cv2.putText(img, label, (bbox[i][0] + 2, bbox[i][1] - 2), font_type, font_scale, [255, 255, 255], font_thickness)
-
-    return img
+    return config

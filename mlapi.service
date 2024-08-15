@@ -21,8 +21,8 @@ StartLimitIntervalSec=0
 
 [Service]
 Type=simple
-Restart=always
-RestartSec=5
+#Restart=always
+#RestartSec=5
 # We need this to get logs correctly
 Environment=PYTHONUNBUFFERED=1
 
@@ -31,15 +31,19 @@ WorkingDirectory=/var/lib/zmeventnotification/mlapi
 # Change to your username
 User=www-data
 #Change paths if needed
-ExecStart=/var/lib/zmeventnotification/mlapi/mlapi.py -c ./mlapiconfig.ini
-ExecStartPost=+/bin/sh -c 'umask 022; pgrep mlapi.py > /var/run/mlapi.pid'
+ExecStart=python3 main.py -c mlapiconfig.ini -d
+#ExecStartPost=/bin/sh -c 'umask 022 && pgrep main.py > /var/run/mlapi.pid'
 
 
 # Note that if you enable use_zm_logs=yes in mlapiconfig.ini
 # you can comment these out. If you enable use_zm_logs, the logs 
 # will be written in ZM log format to <path to zm logs>/zm_mlapi.log 
-StandardOutput=file:/var/log/zm/mlapi.log
-StandardError=file:/var/log/zm/mlapi_error.log
+#StandardOutput=file:mlapi.log
+#StandardError=file:mlapi_error.log
+StandardError=journalctl
+StandardOutput=journalctl
+StandardInput=null
+
 
 [Install]
 WantedBy=multi-user.target

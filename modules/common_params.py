@@ -1,181 +1,179 @@
-import modules.log as g_log
+from dataclasses import dataclass
 
 
+@dataclass
+class CONFIG:
+    MAX_FILE_SIZE_MB = 5
+    ALLOWED_EXTENSIONS = {'.png', '.jpg', '.jpeg'}
+    ACCESS_TOKEN_EXPIRES = 60 * 60  # 1 hr
 
-MAX_FILE_SIZE_MB = 5
-ALLOWED_EXTENSIONS = set(['.png', '.jpg', '.jpeg'])
-ACCESS_TOKEN_EXPIRES = 60 * 60  # 1 hr
-
-log = g_log.ConsoleLog()
-logger = log
-
-config = {}
-monitor_config = {}
-monitor_polygons = {}
-monitor_zone_patterns={}
-config_vals = {
-         'secrets':{
+    global_config = {}
+    monitor_config = {}
+    monitor_polygons = {}
+    monitor_zone_patterns = {}
+    config_vals = {
+        'secrets': {
             'section': 'general',
             'default': None,
             'type': 'string',
         },
-        'auth_enabled':{
+        'auth_enabled': {
             'section': 'general',
             'default': 'yes',
             'type': 'string',
         },
-         'portal':{
+        'portal': {
             'section': 'general',
             'default': '',
             'type': 'string',
         },
-        'api_portal':{
+        'api_portal': {
             'section': 'general',
             'default': '',
             'type': 'string',
         },
-        'user':{
+        'user': {
             'section': 'general',
             'default': None,
             'type': 'string'
         },
-        'password':{
+        'password': {
             'section': 'general',
             'default': None,
             'type': 'string'
         },
-        'basic_auth_user':{
+        'basic_auth_user': {
             'section': 'general',
             'default': None,
             'type': 'string'
         },
-        'basic_auth_password':{
+        'basic_auth_password': {
             'section': 'general',
             'default': None,
             'type': 'string'
         },
-        'import_zm_zones':{
+        'import_zm_zones': {
             'section': 'general',
             'default': 'no',
             'type': 'string',
         },
-        'only_triggered_zm_zones':{
+        'only_triggered_zm_zones': {
             'section': 'general',
             'default': 'no',
             'type': 'string',
         },
-         'cpu_max_processes':{
+        'cpu_max_processes': {
             'section': 'general',
             'default': '1',
             'type': 'int',
         },
-        'gpu_max_processes':{
+        'gpu_max_processes': {
             'section': 'general',
             'default': '1',
             'type': 'int',
         },
-        'tpu_max_processes':{
+        'tpu_max_processes': {
             'section': 'general',
             'default': '1',
             'type': 'int',
         },
 
-        'cpu_max_lock_wait':{
+        'cpu_max_lock_wait': {
             'section': 'general',
             'default': '120',
             'type': 'int',
         },
 
-        'gpu_max_lock_wait':{
+        'gpu_max_lock_wait': {
             'section': 'general',
             'default': '120',
             'type': 'int',
         },
-        'tpu_max_lock_wait':{
+        'tpu_max_lock_wait': {
             'section': 'general',
             'default': '120',
             'type': 'int',
         },
 
-        'processes':{
+        'processes': {
             'section': 'general',
             'default': '1',
             'type': 'int',
         },
-        'port':{
+        'port': {
             'section': 'general',
             'default': '5000',
             'type': 'int',
         },
 
-        'wsgi_server':{
+        'wsgi_server': {
             'section': 'general',
             'default': 'flask',
             'type': 'string',
         },
-      
-        'images_path':{
+
+        'images_path': {
             'section': 'general',
             'default': './images',
             'type': 'string',
         },
-        'db_path':{
+        'db_path': {
             'section': 'general',
             'default': './db',
             'type': 'string',
         },
         'wait': {
             'section': 'general',
-            'default':'0',
+            'default': '0',
             'type': 'int'
         },
-        'mlapi_secret_key':{
+        'mlapi_secret_key': {
             'section': 'general',
             'default': None,
             'type': 'string',
         },
 
-         'max_detection_size':{
+        'max_detection_size': {
             'section': 'general',
             'default': '100%',
             'type': 'string',
         },
-        'detection_sequence':{
+        'detection_sequence': {
             'section': 'general',
             'default': 'object',
             'type': 'str_split'
         },
         'detection_mode': {
-            'section':'general',
-            'default':'all',
-            'type':'string'
+            'section': 'general',
+            'default': 'all',
+            'type': 'string'
         },
         'use_zm_logs': {
-            'section':'general',
-            'default':'no',
-            'type':'string'
+            'section': 'general',
+            'default': 'no',
+            'type': 'string'
         },
 
-         'pyzm_overrides': {
+        'pyzm_overrides': {
             'section': 'general',
             'default': "{}",
             'type': 'dict',
 
         },
 
-        'allow_self_signed':{
+        'allow_self_signed': {
             'section': 'general',
             'default': 'yes',
             'type': 'string'
         },
 
-        'resize':{
+        'resize': {
             'section': 'general',
             'default': 'no',
             'type': 'string'
         },
-       
-       'object_framework':{
+
+        'object_framework': {
             'section': 'object',
             'default': 'opencv',
             'type': 'string'
@@ -202,30 +200,27 @@ config_vals = {
             'default': None,
             'type': 'string'
         },
-     
-      
 
-        'object_processor':{
+        'object_processor': {
             'section': 'object',
             'default': 'cpu',
             'type': 'string'
         },
-        'object_config':{
+        'object_config': {
             'section': 'object',
             'default': 'models/yolov3/yolov3.cfg',
             'type': 'string'
         },
-        'object_weights':{
+        'object_weights': {
             'section': 'object',
             'default': 'models/yolov3/yolov3.weights',
             'type': 'string'
         },
-        'object_labels':{
+        'object_labels': {
             'section': 'object',
             'default': 'models/yolov3/coco.names',
             'type': 'string'
         },
-       
 
         'object_min_confidence': {
             'section': 'object',
@@ -238,37 +233,37 @@ config_vals = {
             'type': 'string'
         },
         # Face
-        'face_detection_framework':{
+        'face_detection_framework': {
             'section': 'face',
             'default': 'dlib',
             'type': 'string'
         },
-        'face_recognition_framework':{
+        'face_recognition_framework': {
             'section': 'face',
             'default': 'dlib',
             'type': 'string'
         },
-        'face_num_jitters':{
+        'face_num_jitters': {
             'section': 'face',
             'default': '0',
             'type': 'int',
         },
-        'face_upsample_times':{
+        'face_upsample_times': {
             'section': 'face',
             'default': '1',
             'type': 'int',
         },
-        'face_model':{
+        'face_model': {
             'section': 'face',
             'default': 'hog',
             'type': 'string',
         },
-        'face_train_model':{
+        'face_train_model': {
             'section': 'face',
             'default': 'hog',
             'type': 'string',
         },
-         'face_recog_dist_threshold': {
+        'face_recog_dist_threshold': {
             'section': 'face',
             'default': '0.6',
             'type': 'float'
@@ -278,28 +273,28 @@ config_vals = {
             'default': 'ball_tree',
             'type': 'string'
         },
-        'known_images_path':{
+        'known_images_path': {
             'section': 'face',
             'default': './known_faces',
             'type': 'string',
         },
-        'unknown_images_path':{
+        'unknown_images_path': {
             'section': 'face',
             'default': './unknown_faces',
             'type': 'string',
         },
-        'unknown_face_name':{
+        'unknown_face_name': {
             'section': 'face',
             'default': 'unknown face',
             'type': 'string',
         },
-         'save_unknown_faces':{
+        'save_unknown_faces': {
             'section': 'face',
             'default': 'yes',
             'type': 'string',
         },
 
-        'save_unknown_faces_leeway_pixels':{
+        'save_unknown_faces_leeway_pixels': {
             'section': 'face',
             'default': '50',
             'type': 'int',
@@ -332,64 +327,63 @@ config_vals = {
             'default': 'yes',
         },
 
-         'alpr_detection_pattern':{
+        'alpr_detection_pattern': {
             'section': 'general',
             'default': '.*',
             'type': 'string'
         },
-        'alpr_api_type':{
+        'alpr_api_type': {
             'section': 'alpr',
             'default': 'cloud',
             'type': 'string'
         },
 
         # Plate recognition specific
-        'platerec_stats':{
+        'platerec_stats': {
             'section': 'alpr',
             'default': 'no',
             'type': 'string'
         },
 
-       
-        'platerec_regions':{
+        'platerec_regions': {
             'section': 'alpr',
             'default': None,
             'type': 'eval'
         },
-        'platerec_payload':{
+        'platerec_payload': {
             'section': 'alpr',
             'default': None,
             'type': 'eval'
         },
-        'platerec_config':{
+        'platerec_config': {
             'section': 'alpr',
             'default': None,
             'type': 'eval'
         },
-        'platerec_min_dscore':{
+        'platerec_min_dscore': {
             'section': 'alpr',
             'default': '0.3',
             'type': 'float'
         },
-       
-        'platerec_min_score':{
+
+        'platerec_min_score': {
             'section': 'alpr',
             'default': '0.5',
             'type': 'float'
         },
 
         # OpenALPR specific
-        'openalpr_recognize_vehicle':{
+        'openalpr_recognize_vehicle': {
             'section': 'alpr',
             'default': '0',
             'type': 'int'
         },
-        'openalpr_country':{
+        'openalpr_country': {
             'section': 'alpr',
             'default': 'us',
             'type': 'string'
         },
-        'openalpr_state':{
+        'openalpr_state': {
             'section': 'alpr',
             'default': None,
             'type': 'string'
@@ -403,13 +397,13 @@ config_vals = {
 
         # OpenALPR command line specfic
 
-         'openalpr_cmdline_binary':{
+        'openalpr_cmdline_binary': {
             'section': 'alpr',
             'default': 'alpr',
             'type': 'string'
         },
-        
-         'openalpr_cmdline_params':{
+
+        'openalpr_cmdline_params': {
             'section': 'alpr',
             'default': '-j',
             'type': 'string'
@@ -418,9 +412,5 @@ config_vals = {
             'section': 'alpr',
             'default': '0.3',
             'type': 'float'
-        },
-       
-
-
-}
-
+        }
+    }
